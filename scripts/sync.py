@@ -26,9 +26,11 @@ def merge_all(root: str, output: str):
 
     for patch in patches:
         with open(patch) as file:
-            for line in file:
-                output.write(line)
-        output.write("\n")
+            contents = file.read()
+            output.write(contents)
+            last_line = contents[len(contents) - 1]
+            if last_line[len(last_line) - 1] != "\n":
+                output.write("\n")
     
     output.close()
 

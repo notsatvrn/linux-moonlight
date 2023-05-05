@@ -13,6 +13,11 @@ _version="6.1"
 # - "bore-tuned": BORE w/ tuned sysctl
 _cpusched="cfs"
 
+# enable Con Kolivas' ck-hrtimer patches.
+# improves latency with high tick rates (1000Hz+)
+# options: y/n
+_ck_hrtimer="y" 
+
 # patch version.
 
 _patch=0
