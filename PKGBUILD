@@ -1,22 +1,104 @@
 # Original Maintainer: Andreas Radke <andyrtr@archlinux.org>
 # Maintainer: satvrn <pastawho@gmail.com>
 
-# kernel version.
-# options:
-# - 6.1 (default)
+### kernel version.
+# OPTIONS:
+# "6.1" (default)
 _version="6.1"
 
-# CPU scheduler.
-# options:
-# - "cfs": CFS (Completely Fair Scheduler) (default)
-# - "bore": BORE (Burst-Oriented Response Enhancer)
-# - "bore-tuned": BORE w/ tuned sysctl
-_cpusched="cfs"
+# ---
+# KERNEL OPTIONS
+# ---
 
-# enable Con Kolivas' ck-hrtimer patches.
-# improves latency with high tick rates (1000Hz+)
-# options: y/n
-_ck_hrtimer="y" 
+### CPU scheduler.
+# OPTIONS:
+# "cfs"        - CFS: the default CPU scheduler in Linux
+# "bmq"        - BMQ: a more modern evolution of PDS
+# "pds"        - PDS: simple and efficient scheduler for interactive tasks
+# "bore"       - BORE: improved responsiveness over CFS
+# "bore-tuned" - BORE w/ tuned sysctl config
+# "tt"         - TT: handles scheduling based on task types
+# (default: "cfs")
+_cpu_scheduler="bore-tuned"
+
+### CPU scheduler yield type. (pulled from TKG)
+## effect is based on the CPU scheduler you picked.
+# OPTIONS (PDS):
+# 0 - no yield: best option for gaming
+# 1 - yield only to better priority/deadline tasks: potentially unstable
+# 2 - expire timeslice and recalculate deadline: usually worst performance
+# OPTIONS (BMQ):
+# 0 - no yield
+# 1 - deboost and requeue task
+# 2 - set rq skip task
+# (default: 1)
+_cpu_scheduler_yield=1
+
+### NEST patches.
+## improves moderate workload performance by reusing hot cores.
+## only works with CFS or BORE (including tuned)!
+# OPTIONS: y/n (default: y)
+_nest="y"
+
+### Con Kolivas' ck-hrtimer patches.
+## improves latency with high tick rates (1000Hz+).
+# OPTIONS: y/n (default: y)
+_ck_hrtimer="y"
+
+### Google's BBR2 TCP congestion control patches.
+## improves TCP performance.
+# OPTIONS: y/n (default: y)
+_bbr2="y"
+
+### LRNG patches.
+## improves RNG performance.
+# OPTIONS: y/n (default: y)
+_lrng="y"
+
+# ---
+# COMPILATION OPTIONS
+# ---
+
+### C compiler to be used.
+# OPTIONS: "gcc" | "clang" (default: "gcc")
+_compiler="gcc"
+
+### custom path to C compiler executable.
+# OPTIONS: "" (use system path) | "<path>" (default: "")
+_custom_compiler_path=""
+
+### LLVM's LTO.
+## requires that _compiler is clang.
+# OPTIONS:
+# full - single-threaded LTO: slower and uses more memory, highest runtime performance.
+# thin - multi-threaded LTO: faster and uses less memory, lower runtime performance than full.
+# none - do not use LTO
+# (default: "none")
+_llvm_lto="none"
+
+### localmodconfig file.
+## only builds a set number of modules at compile time
+# OPTIONS: "" (disabled) or "<path>/<to>/<file>" (defualt: "")
+_localmodconfig=""
+
+### enable or disable ccache.
+## improves compilation speed by reusing previously compiled objects.
+# OPTIONS: y/n (default: y)
+_ccache="y"
+
+### configuration utility.
+# OPTIONS:
+# "nconfig"
+# "menuconfig"
+# "xconfig"
+# "gconfig"
+# "" (disabled)
+# (default: "")
+_configurator=""
+
+# ---
+# configuration is done.
+# ---
 
 # patch version.
 
@@ -27,8 +109,7 @@ case "$_version" in
     _patch=27
     ;;
   *)
-    msg2 "Unsupported kernel version, exiting..."
-    exit 1
+    _error "Unsupported kernel version."
     ;;
 esac
 
@@ -42,7 +123,7 @@ url="https://github.com/notsatvrn/linux-moonlight"
 arch=(x86_64)
 license=(GPL2)
 makedepends=(
-  bc libelf pahole cpio perl tar xz make patch
+  bc libelf pahole cpio perl tar xz glibc binutils make patch
 )
 options=('!strip')
 _srcname=linux-$pkgver
@@ -52,8 +133,8 @@ source=(
   "config"
   "0001-more-uarches.patch"
   "0002-arch.patch"
-  "0003-ck-hrtimer.patch"
-  "0004-clear.patch"
+  "0003-clear.patch"
+  "0004-cachyos.patch"
 )
 
 validpgpkeys=(
@@ -75,18 +156,94 @@ export KBUILD_BUILD_USER=$pkgbase
 export KBUILD_BUILD_TIMESTAMP
 KBUILD_BUILD_TIMESTAMP="$(date -Ru${SOURCE_DATE_EPOCH:+d @$SOURCE_DATE_EPOCH})"
 
-prepare() {
-  case "$_cpusched" in
-    "cfs")
-      ;;
-    "bore")
-      ;;
+if [ "$_cpu_scheduler" != "cfs" ]; then
+  sha256sums+=("SKIP")
+  case "$_cpu_scheduler" in
+    "cfs") ;;
+    "bmq"|"pds") source+=("0005-prjc.patch") ;;
+    "bore") source+=("0005-BORE.patch") ;;
+    "bore-tuned") source+=("0005-BORE-tuned.patch") ;;
+    "tt") source+=("0005-TT.patch") ;;
     *)
-      msg2 "Invalid CPU scheduler, exiting..."
-      exit 1
+      _error "Invalid CPU scheduler \"$_cpu_scheduler\"."
       ;;
   esac
+fi
 
+if [ "$_nest" != "n" ]; then
+  if [ "$_cpu_scheduler" == "cfs" ] || [ "${_cpu_scheduler:0:4}" == "bore" ]; then
+    sha256sums+=("SKIP")
+    source+=("0006-NEST.patch")
+  else
+    _error "NEST patches only work with CFS or BORE."
+  fi
+fi
+
+if [ "$_ck_hrtimer" != "n" ]; then
+  sha256sums+=("SKIP")
+  source+=("0007-ck-hrtimer.patch")
+fi
+
+if [ "$_bbr2" != "n" ]; then
+  sha256sums+=("SKIP")
+  source+=("0008-BBR2.patch")
+fi
+
+if [ "$_lrng" != "n" ]; then
+  sha256sums+=("SKIP")
+  source+=("0009-LRNG.patch")
+fi
+
+case "$_compiler" in
+  "gcc")
+    makedepends+=(gcc gcc-libs)
+    ;;
+  "clang")
+    makedepends+=(clang llvm lld python)
+    BUILD_FLAGS=(
+        CC=clang
+        LD=ld.lld
+        LLVM=1
+        LLVM_IAS=1
+    )
+    ;;
+  *) ;;
+esac
+
+# helper functions pulled from TKG
+
+_undefine() {
+  for _config_name in "$@"; do
+    scripts/config -k --undefine "${_config_name}"
+  done
+}
+
+_enable() {
+  for _config_name in "$@"; do
+    scripts/config -k --enable "${_config_name}"
+  done
+}
+
+_disable() {
+  for _config_name in "$@"; do
+    scripts/config -k --disable "${_config_name}"
+  done
+}
+
+_module() {
+  for _config_name in "$@"; do
+    scripts/config -k --module "${_config_name}"
+  done
+}
+
+# helper functions pulled from CachyOS
+
+_fatal() {
+  error "$@";
+  exit 1;
+}
+
+prepare() {
   cd $_srcname
 
   echo "Setting version..."
@@ -103,18 +260,54 @@ prepare() {
     patch -Np1 < "../$src"
   done
 
+  # CPU scheduler.
+  if [ "$_cpu_scheduler" != "cfs" ]; then
+    _disable "FAIR_GROUP_SCHED" "CFS_BANDWIDTH"
+
+    if [ "$_cpu_scheduler" == "bmq" ] || [ "$_cpu_scheduler" == "pds" ]; then
+      _enable "SCHED_ALT" "SCHED_${_cpu_scheduler^^}"
+
+      # CPU scheduler yield type. (pulled from TKG)
+      case "$_cpu_scheduler_yield" in
+        0) sed -i -e 's/int sched_yield_type __read_mostly = 1;/int sched_yield_type __read_mostly = 0;/' ./kernel/sched/alt_core.c ;;
+        2) sed -i -e 's/int sched_yield_type __read_mostly = 1;/int sched_yield_type __read_mostly = 2;/' ./kernel/sched/alt_core.c ;;
+        *) ;;
+      esac
+    fi
+
+    case "$_cpu_scheduler" in
+      "bmq") _disable "SCHED_PDS" ;;
+      "pds") _disable "SCHED_BMQ" ;;
+      "bore"|"bore-tuned") _enable "SCHED_BORE" ;;
+      "tt") _enable "TT_SCHED" "TT_ACCOUNTING" ;;
+    esac
+  fi
+
   echo "Setting config..."
   cp ../config .config
-  make olddefconfig
+  make ${BUILD_FLAGS[*]} olddefconfig
   diff -u ../config .config || :
 
-  make -s kernelrelease > version
+  if [ "$_localmodconfig" != "" ]; then
+    msg2 "Running localmodconfig..."
+    make ${BUILD_FLAGS[*]} LSMOD="$(realpath -f "$_localmodconfig")" localmodconfig
+  fi
+
+  make ${BUILD_FLAGS[*]} -s kernelrelease > version
   echo "Prepared $pkgbase version $(<version)"
+
+  case "$_configurator" in
+    "") ;;
+    "nconfig"|"menuconfig"|"xconfig"|"gconfig")
+      make ${BUILD_FLAGS[*]} "$_configurator"
+      ;;
+    *) msg "Invalid configurator, skipping...";;
+  esac
 }
 
 build() {
   cd $_srcname
-  make all
+  make ${BUILD_FLAGS[*]} all
 }
 
 _package() {
@@ -132,13 +325,13 @@ _package() {
   echo "Installing boot image..."
   # systemd expects to find the kernel here to allow hibernation
   # https://github.com/systemd/systemd/commit/edda44605f06a41fb86b7ab8128dcf99161d2344
-  install -Dm644 "$(make -s image_name)" "$modulesdir/vmlinuz"
+  install -Dm644 "$(make ${BUILD_FLAGS[*]} -s image_name)" "$modulesdir/vmlinuz"
 
   # Used by mkinitcpio to name the kernel
   echo "$pkgbase" | install -Dm644 /dev/stdin "$modulesdir/pkgbase"
 
   echo "Installing modules..."
-  make INSTALL_MOD_PATH="$pkgdir/usr" INSTALL_MOD_STRIP=1 \
+  make ${BUILD_FLAGS[*]} INSTALL_MOD_PATH="$pkgdir/usr" INSTALL_MOD_STRIP=1 \
     DEPMOD=/doesnt/exist modules_install  # Suppress depmod
 
   # remove build and source links

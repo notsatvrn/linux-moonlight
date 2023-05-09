@@ -1,5 +1,5 @@
-src/
-pkg/
-linux-*
-config
-*.patch
+/src/
+/pkg/
+/linux-*
+/config
+/*.patch
